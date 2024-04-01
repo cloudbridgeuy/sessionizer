@@ -1,0 +1,55 @@
+[workspace]
+members = ["xtask/", "crates/*"]
+resolver = "2"
+
+[workspace.package]
+rust-version = "1.77"
+edition = "2021"
+license = "MIT"
+authors = ["Guzmán Monné"]
+
+[profile.dev]
+# Disabling debug info speeds up builds.
+debug = 0
+
+[profile.release]
+# Remove the symbols for the library.
+strip = true
+# Build the release binaries incrementally.
+incremental = true
+# Set this to 1 or 2 to get more useful backtraces in debugger.
+debug = 0
+
+[profile.dev-rel]
+inherits = "release"
+debug = 2
+
+[workspace.lints.rust]
+rust_2018_idioms = "warn"
+unused_lifetimes = "warn"
+unreachable_pub = "warn"
+semicolon_in_expressions_from_macros = "warn"
+
+[workspace.lints.clippy]
+
+## lint groups
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+restriction = { level = "allow", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+## allow following lints
+# () makes a fine error in most cases
+result_unit_err = "allow"
+# We don't expose public APIs that matter like this
+len_without_is_empty = "allow"
+# We have macros that rely on this currently
+enum_variant_names = "allow"
+# Builder pattern disagrees
+new_ret_no_self = "allow"
+# Has a bunch of false positives
+useless_asref = "allow"
+# Has false positives
+assigning_clones = "allow"
