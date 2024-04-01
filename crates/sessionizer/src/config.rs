@@ -1,5 +1,33 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{format_err, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Config {
+    pub folders: Vec<String>,
+    pub sessions: crate::sessions::Sessions,
+    pub env: Vec<String>,
+}
+
+impl Config {
+    pub fn serialize(config: &Config) -> Result<String> {
+        match serde_yaml::to_string(&config) {
+            Ok(text) => Ok(text),
+            Err(err) => Err(format_err!(err)),
+        }
+    }
+
+    pub fn _deserialize(yaml: &str) -> Result<Config> {
+        match serde_yaml::from_str(yaml) {
+            Ok(config) => Ok(config),
+            Err(err) => Err(format_err!(err)),
+        }
+    }
+
+    pub fn home() -> Result<String> {
+        Ok(format!("{}/.sessionizer.yaml", std::env::var("HOME")?))
+    }
+}
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
@@ -31,9 +59,40 @@ pub async fn run(cli: Cli) -> Result<()> {
 }
 
 pub async fn init(force: bool) -> Result<()> {
-    todo!()
+    let path = Config::home()?;
+
+    if std::path::Path::new(&path).exists() && !force {
+        return Err(format_err!("Configuration file already exists. Use --force to override."));
+    }
+
+    let config = Config {
+        folders: vec![],
+        sessions: crate::sessions::Sessions { current: String::new(), history: vec![] },
+        env: vec![],
+    };
+
+    let text = Config::serialize(&config)?;
+    std::fs::write(&path, text)?;
+
+    Ok(())
 }
 
 pub async fn edit() -> Result<()> {
-    todo!()
+    let editor = std::env::var("EDITOR")?;
+    let path = Config::home()?;
+
+    // Execute the command `editor path`
+    match tokio::process::Command::new(&editor)
+        .arg(path)
+        .spawn()
+        .expect(format!("Expect the {} to start", &editor).as_str())
+        .wait()
+        .await
+    {
+        Ok(_) => {
+            println!("Configuration file edited.");
+            Ok(())
+        }
+        Err(err) => Err(format_err!(err)),
+    }
 }

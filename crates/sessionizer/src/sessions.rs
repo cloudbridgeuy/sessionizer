@@ -1,5 +1,12 @@
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Sessions {
+    pub current: String,
+    pub history: Vec<String>,
+}
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
