@@ -11,7 +11,7 @@ pub struct Sessions {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// List the previously visited sessions.
-    #[clap(name = "history")]
+    #[clap(name = "history", alias = "list")]
     History,
     /// Go to a session.
     #[clap(name = "go")]
@@ -26,20 +26,20 @@ pub enum Commands {
         session: String,
     },
     /// Remove a running session.
-    #[clap(name = "remove")]
+    #[clap(name = "remove", alias = "rm")]
     Remove {
         /// Tmux Session
         session: String,
     },
     /// Go or show the next session.
-    #[clap(name = "next")]
+    #[clap(name = "next", alias = "n")]
     Next {
         /// Show the next session but don't transition to it.
         #[clap(short, long)]
         show: bool,
     },
     /// Go or show the previous session.
-    #[clap(name = "previous")]
+    #[clap(name = "prev", alias = "p")]
     Previous {
         /// Show the previous session but don't transition to it.
         #[clap(short, long)]
@@ -67,7 +67,13 @@ pub async fn run(cli: Cli) -> Result<()> {
 }
 
 pub async fn history() -> Result<()> {
-    todo!()
+    let config = crate::config::Config::load()?;
+
+    for (index, session) in config.sessions.history.iter().enumerate() {
+        println!("{}: {}", index + 1, session);
+    }
+
+    Ok(())
 }
 
 pub async fn go(session: String) -> Result<()> {
@@ -75,17 +81,95 @@ pub async fn go(session: String) -> Result<()> {
 }
 
 pub async fn add(session: String) -> Result<()> {
-    todo!()
+    let mut config = crate::config::Config::load()?;
+
+    if config.sessions.history.contains(&session) {
+        println!("Session already exists in the history.");
+        return Ok(());
+    }
+
+    config.sessions.history.push(session.clone());
+
+    crate::config::Config::save(&config)?;
+
+    println!("Session {} added to the history.", &session);
+
+    Ok(())
 }
 
 pub async fn remove(session: String) -> Result<()> {
-    todo!()
+    let mut config = crate::config::Config::load()?;
+
+    // Remove the `session` from the `history`.
+    config.sessions.history.retain(|s| s != &session);
+
+    crate::config::Config::save(&config)?;
+
+    println!("Session {} removed from the history.", &session);
+
+    Ok(())
 }
 
 pub async fn next(show: bool) -> Result<()> {
-    todo!()
+    let mut config = crate::config::Config::load()?;
+
+    // Check if the `history` has zero entries.
+    if config.sessions.history.is_empty() {
+        println!("No more sessions in the history.");
+        return Ok(());
+    }
+
+    // Check if there's only one `session` in the `history`.
+    if config.sessions.history.len() == 1 {
+        println!("Only one session in the history.");
+        return Ok(());
+    }
+
+    // Pop the latest `session` of the history.
+    let session = config.sessions.history.pop();
+
+    // Move the popped `session` to the first element of the history.
+    if let Some(session) = session {
+        if show {
+            println!("Next session: {}", session);
+            return Ok(());
+        }
+        config.sessions.history.insert(0, session);
+    } else {
+        println!("No more sessions in the history.");
+    }
+
+    crate::config::Config::save(&config)?;
+
+    Ok(())
 }
 
 pub async fn previous(show: bool) -> Result<()> {
-    todo!()
+    let mut config = crate::config::Config::load()?;
+
+    // Check if the `history` has zero entries.
+    if config.sessions.history.is_empty() {
+        println!("No more sessions in the history.");
+        return Ok(());
+    }
+
+    // Check if there's only one `session` in the `history`.
+    if config.sessions.history.len() == 1 {
+        println!("Only one session in the history.");
+        return Ok(());
+    }
+
+    // Pop the first element from the `history`.
+    let session = config.sessions.history.remove(0);
+
+    // Append the `session` to the last of the `history` vector.
+    if show {
+        println!("Previous session: {}", session);
+        return Ok(());
+    }
+
+    config.sessions.history.push(session.clone());
+    crate::config::Config::save(&config)?;
+
+    Ok(())
 }

@@ -4,28 +4,39 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub folders: Vec<String>,
+    pub directories: Vec<String>,
     pub sessions: crate::sessions::Sessions,
     pub env: Vec<String>,
 }
 
 impl Config {
-    pub fn serialize(config: &Config) -> Result<String> {
-        match serde_yaml::to_string(&config) {
+    pub fn save(config: &Config) -> Result<()> {
+        let path = Self::home()?;
+
+        let text = match serde_yaml::to_string(&config) {
             Ok(text) => Ok(text),
+            Err(err) => Err(format_err!(err)),
+        }?;
+
+        match std::fs::write(path, text) {
+            Ok(_) => Ok(()),
             Err(err) => Err(format_err!(err)),
         }
     }
 
-    pub fn _deserialize(yaml: &str) -> Result<Config> {
-        match serde_yaml::from_str(yaml) {
+    pub fn load() -> Result<Config> {
+        let path = Self::home()?;
+
+        // Read path and store it on a variable called yaml
+        let yaml = std::fs::read_to_string(path)?;
+        match serde_yaml::from_str(&yaml) {
             Ok(config) => Ok(config),
             Err(err) => Err(format_err!(err)),
         }
     }
 
     pub fn home() -> Result<String> {
-        Ok(format!("{}/.sessionizer.yaml", std::env::var("HOME")?))
+        Ok(format!("{}/.sessionizer.bak.yaml", std::env::var("HOME")?))
     }
 }
 
@@ -66,13 +77,14 @@ pub async fn init(force: bool) -> Result<()> {
     }
 
     let config = Config {
-        folders: vec![],
+        directories: vec![],
         sessions: crate::sessions::Sessions { current: String::new(), history: vec![] },
         env: vec![],
     };
 
-    let text = Config::serialize(&config)?;
-    std::fs::write(&path, text)?;
+    Config::save(&config)?;
+
+    println!("Configuration file created.");
 
     Ok(())
 }
