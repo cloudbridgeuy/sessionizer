@@ -17,25 +17,21 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        log::debug!("Saving configuration to {}", self.path);
         let text = serde_yaml::to_string(&self).wrap_err("fail to serialize config")?;
 
         std::fs::write(&self.path, text).wrap_err("fail to save config")?;
-        log::debug!("Configuration saved to {}", self.path);
-        log::debug!("config = {:#?}", self);
         Ok(())
     }
 
     pub fn load(path: &str) -> Result<Self> {
-        log::debug!("Loading configuration from {}", path);
         if !std::path::Path::new(path).exists() {
             return Err(eyre!("Configuration file does not exist."));
         }
         let yaml = std::fs::read_to_string(path)?;
         let mut config: Self =
             serde_yaml::from_str(&yaml).wrap_err("fail to deserialize config")?;
+        log::debug!("config = {:#?}", config);
         config.path = path.to_string();
-        log::debug!("Configuration loaded from {}", path);
         Ok(config)
     }
 

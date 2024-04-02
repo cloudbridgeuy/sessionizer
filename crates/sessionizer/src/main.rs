@@ -77,6 +77,7 @@ async fn run() -> color_eyre::eyre::Result<()> {
         Config::load(&config_path)?
     };
 
+    log::debug!("Running command");
     let result = match cli.command {
         Commands::Config(cli) => crate::config::run(&config_path, cli).await,
         Commands::Directories(cli) => crate::directories::run(config, cli).await,

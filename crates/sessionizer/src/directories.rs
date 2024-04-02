@@ -8,6 +8,7 @@ use crate::config::Config;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Directory {
+    pub id: String,
     pub path: String,
     pub mindepth: usize,
     pub maxdepth: usize,
@@ -34,8 +35,8 @@ pub enum Commands {
     /// Remove a directory to be tracked by sessionizer.
     #[clap(name = "remove")]
     Remove {
-        /// Directory to add
-        path: String,
+        /// Directory unique identifier to add
+        id: String,
     },
     /// List the directoried added.
     #[clap(name = "list")]
@@ -58,7 +59,7 @@ pub async fn run(config: Config, cli: Cli) -> Result<()> {
         Commands::Add { path, mindepth, maxdepth, grep } => {
             add(config, path, mindepth, maxdepth, grep).await
         }
-        Commands::Remove { path } => remove(config, path).await,
+        Commands::Remove { id } => remove(config, id).await,
         Commands::List => list(config).await,
         Commands::Evaluate => evaluate_cmd(config).await,
     }
@@ -71,40 +72,23 @@ pub async fn add(
     maxdepth: Option<usize>,
     grep: Option<String>,
 ) -> Result<()> {
-    // Find directory with the same `path` inside `config.directories`.
-    let maybe_directory = config.directories.iter().find(|d| d.path == path).to_owned();
-
-    let directory = match maybe_directory {
-        Some(directory) => Directory {
-            path,
-            mindepth: mindepth.unwrap_or(directory.mindepth),
-            maxdepth: maxdepth.unwrap_or(directory.maxdepth),
-            grep: grep.or(directory.grep.clone()),
-        },
-        None => Directory {
-            path,
-            mindepth: mindepth.unwrap_or(1),
-            maxdepth: maxdepth.unwrap_or(1),
-            grep,
-        },
+    let directory = Directory {
+        id: uuid::Uuid::new_v4().to_string(),
+        path,
+        mindepth: mindepth.unwrap_or(1),
+        maxdepth: maxdepth.unwrap_or(1),
+        grep,
     };
 
-    let path = directory.path.clone();
-
-    config.directories = config
-        .directories
-        .into_iter()
-        .filter(|d| d.path != path)
-        .chain(std::iter::once(directory))
-        .collect();
+    config.directories.push(directory);
 
     config.save()?;
 
     Ok(())
 }
 
-pub async fn remove(mut config: Config, path: String) -> Result<()> {
-    config.directories.retain(|d| d.path != path);
+pub async fn remove(mut config: Config, id: String) -> Result<()> {
+    config.directories.retain(|d| d.id != id);
 
     config.save()?;
 
@@ -124,6 +108,7 @@ pub fn evaluate(config: &Config) -> Result<Vec<String>> {
         // Create a regular expression from `directory.grep`.
         let grep = Regex::new(directory.grep.as_ref().unwrap())?;
 
+        log::debug!("Scanning directory: {:?}", directory);
         for entry in WalkDir::new(&directory.path)
             .min_depth(directory.mindepth)
             .max_depth(directory.maxdepth)
