@@ -8,6 +8,8 @@ mod sessions;
 mod shutdown;
 mod tmux;
 
+use crate::config::Config;
+
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Handle the sessionizer configuration
@@ -24,6 +26,9 @@ pub enum Commands {
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = "Handle tmux sessions based on your file system")]
 pub struct Cli {
+    /// Custom path for the configuration file
+    #[clap(short, long, env = "SESSIONIZER_CONFIG", global = true)]
+    pub config: Option<String>,
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -51,10 +56,31 @@ async fn main() -> color_eyre::eyre::Result<()> {
 }
 
 async fn run() -> color_eyre::eyre::Result<()> {
-    let result = match Cli::parse().command {
-        Commands::Config(cli) => crate::config::run(cli).await,
-        Commands::Directories(cli) => crate::directories::run(cli).await,
-        Commands::Sessions(cli) => crate::sessions::run(cli).await,
+    log::debug!("Parsing CLI arguments");
+    let cli = Cli::parse();
+
+    log::debug!("Loading configuration path");
+    let config_path = match cli.config {
+        Some(path) => path,
+        None => Config::home()?,
+    };
+
+    let config: Config = if let Commands::Config(sub) = &cli.command {
+        if let crate::config::Commands::Init { force: _ } = sub.command {
+            log::debug!("Avoid creating configuration file");
+            Config::new(&config_path)
+        } else {
+            log::debug!("Loading configuration from {}", config_path);
+            Config::load(&config_path)?
+        }
+    } else {
+        Config::load(&config_path)?
+    };
+
+    let result = match cli.command {
+        Commands::Config(cli) => crate::config::run(&config_path, cli).await,
+        Commands::Directories(cli) => crate::directories::run(config, cli).await,
+        Commands::Sessions(cli) => crate::sessions::run(config, cli).await,
     };
 
     match result {

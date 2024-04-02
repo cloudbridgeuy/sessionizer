@@ -53,25 +53,24 @@ pub struct Cli {
     pub command: Commands,
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
+pub async fn run(config: Config, cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Add { path, mindepth, maxdepth, grep } => {
-            add(path, mindepth, maxdepth, grep).await
+            add(config, path, mindepth, maxdepth, grep).await
         }
-        Commands::Remove { path } => remove(path).await,
-        Commands::List => list().await,
-        Commands::Evaluate => evaluate_cmd().await,
+        Commands::Remove { path } => remove(config, path).await,
+        Commands::List => list(config).await,
+        Commands::Evaluate => evaluate_cmd(config).await,
     }
 }
 
 pub async fn add(
+    mut config: Config,
     path: String,
     mindepth: Option<usize>,
     maxdepth: Option<usize>,
     grep: Option<String>,
 ) -> Result<()> {
-    let mut config = Config::load()?;
-
     // Find directory with the same `path` inside `config.directories`.
     let maybe_directory = config.directories.iter().find(|d| d.path == path).to_owned();
 
@@ -99,30 +98,26 @@ pub async fn add(
         .chain(std::iter::once(directory))
         .collect();
 
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn remove(path: String) -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn remove(mut config: Config, path: String) -> Result<()> {
     config.directories.retain(|d| d.path != path);
 
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn list() -> Result<()> {
-    println!("{:#?}", Config::load()?.directories);
+pub async fn list(config: Config) -> Result<()> {
+    println!("{:#?}", config.directories);
 
     Ok(())
 }
 
-pub fn evaluate() -> Result<Vec<String>> {
-    let config = Config::load()?;
-
+pub fn evaluate(config: &Config) -> Result<Vec<String>> {
     let mut directories = Vec::new();
 
     for directory in config.directories.iter() {
@@ -155,8 +150,8 @@ pub fn evaluate() -> Result<Vec<String>> {
     Ok(directories)
 }
 
-pub async fn evaluate_cmd() -> Result<()> {
-    println!("{}", evaluate()?.join("\n"));
+pub async fn evaluate_cmd(config: Config) -> Result<()> {
+    println!("{}", evaluate(&config)?.join("\n"));
 
     Ok(())
 }

@@ -7,31 +7,40 @@ pub struct Config {
     pub directories: Vec<crate::directories::Directory>,
     pub sessions: Vec<String>,
     pub env: Vec<String>,
+    #[serde(skip)]
+    path: String,
 }
 
 impl Config {
-    pub fn new() -> Self {
-        Self { directories: vec![], sessions: vec![], env: vec![] }
+    pub fn new(path: &str) -> Self {
+        Self { directories: vec![], sessions: vec![], env: vec![], path: path.to_string() }
     }
 
-    pub fn save(config: &Config) -> Result<()> {
-        let path = Self::home()?;
+    pub fn save(&self) -> Result<()> {
+        log::debug!("Saving configuration to {}", self.path);
+        let text = serde_yaml::to_string(&self).wrap_err("fail to serialize config")?;
 
-        let text = serde_yaml::to_string(&config).wrap_err("fail to serialize config")?;
-
-        std::fs::write(path, text).wrap_err("fail to save config")
+        std::fs::write(&self.path, text).wrap_err("fail to save config")?;
+        log::debug!("Configuration saved to {}", self.path);
+        log::debug!("config = {:#?}", self);
+        Ok(())
     }
 
-    pub fn load() -> Result<Config> {
-        let path = Self::home()?;
-
-        // Read path and store it on a variable called yaml
+    pub fn load(path: &str) -> Result<Self> {
+        log::debug!("Loading configuration from {}", path);
+        if !std::path::Path::new(path).exists() {
+            return Err(eyre!("Configuration file does not exist."));
+        }
         let yaml = std::fs::read_to_string(path)?;
-        serde_yaml::from_str(&yaml).wrap_err("fail to deserialize config")
+        let mut config: Self =
+            serde_yaml::from_str(&yaml).wrap_err("fail to deserialize config")?;
+        config.path = path.to_string();
+        log::debug!("Configuration loaded from {}", path);
+        Ok(config)
     }
 
     pub fn home() -> Result<String> {
-        Ok(format!("{}/.sessionizer.bak.yaml", std::env::var("HOME")?))
+        Ok(format!("{}/.sessionizer.yaml", std::env::var("HOME")?))
     }
 }
 
@@ -60,30 +69,28 @@ pub struct Cli {
     pub command: Commands,
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
+pub async fn run(path: &str, cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Init { force } => init(force).await,
+        Commands::Init { force } => init(path, force).await,
         Commands::Edit => edit().await,
-        Commands::Print => print().await,
+        Commands::Print => print(path).await,
     }
 }
 
-pub async fn print() -> Result<()> {
-    println!("{:#?}", Config::load()?);
+pub async fn print(path: &str) -> Result<()> {
+    println!("{:#?}", Config::load(path));
 
     Ok(())
 }
 
-pub async fn init(force: bool) -> Result<()> {
-    let path = Config::home()?;
-
+pub async fn init(path: &str, force: bool) -> Result<()> {
     if std::path::Path::new(&path).exists() && !force {
         return Err(eyre!("Configuration file already exists. Use --force to override."));
     }
 
-    let config = Config::new();
+    let config = Config::new(path);
 
-    Config::save(&config)?;
+    config.save()?;
 
     println!("Configuration file created.");
 

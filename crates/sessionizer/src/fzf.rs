@@ -1,6 +1,8 @@
 use color_eyre::eyre::{eyre, OptionExt, Result, WrapErr};
 use tokio::io::AsyncWriteExt;
 
+use crate::config::Config;
+
 pub async fn sessions(sessions: Vec<String>) -> Result<String> {
     let mut fzf = tokio::process::Command::new("fzf")
         .args([
@@ -31,8 +33,8 @@ pub async fn sessions(sessions: Vec<String>) -> Result<String> {
     }
 }
 
-pub async fn directories() -> Result<String> {
-    let dirs = crate::directories::evaluate()?;
+pub async fn directories(config: &Config) -> Result<String> {
+    let dirs = crate::directories::evaluate(config)?;
 
     let mut fzf = tokio::process::Command::new("fzf")
         .args(["--header", "Select a directory from the list to start a new session"])

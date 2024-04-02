@@ -77,58 +77,33 @@ pub struct Cli {
     pub command: Commands,
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
+pub async fn run(config: Config, cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::History => history().await,
-        Commands::Go { session } => go(session).await,
-        Commands::Add { session, set } => add(session, set).await,
-        Commands::Remove { session } => remove(session).await,
-        Commands::Next { show } => next(show).await,
-        Commands::Previous { show } => previous(show).await,
-        Commands::Sync { reverse } => sync(reverse).await,
-        Commands::New { session } => new(session).await,
+        Commands::History => history(config).await,
+        Commands::Go { session } => go(config, session).await,
+        Commands::Add { session, set } => add(config, session, set).await,
+        Commands::Remove { session } => remove(config, session).await,
+        Commands::Next { show } => next(config, show).await,
+        Commands::Previous { show } => previous(config, show).await,
+        Commands::Sync { reverse } => sync(config, reverse).await,
+        Commands::New { session } => new(config, session).await,
     }
 }
 
-pub async fn history() -> Result<()> {
-    let config = Config::load()?;
-
+pub async fn history(config: Config) -> Result<()> {
     println!("{}", config.sessions.join("\n"));
 
     Ok(())
 }
 
-pub async fn set(session: &str) -> Result<()> {
-    // Create the session if it doesn't exist.
-    log::debug!("Checking if tmux has session: {}", session);
-    if !tmux::has_session(session).await? {
-        log::debug!("Creating session: {}", session);
-        tmux::new_session(session).await?
-    }
-
-    // Attach to the existing session.
-    log::debug!("Checking if tmux is running");
-    if tmux::is_active()? {
-        log::debug!("Changing client to point to session: {}", session);
-        tmux::switch_client(session).await?;
-    } else {
-        log::debug!("Attaching tmux to session: {}", session);
-        tmux::attach(session).await?;
-    }
-
-    Ok(())
-}
-
-pub async fn new(session: Option<String>) -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn new(mut config: Config, session: Option<String>) -> Result<()> {
     let session = if session.is_none() {
         if config.sessions.is_empty() {
             println!("No sessions in the history.");
             return Ok(());
         }
 
-        Some(fzf::directories().await?)
+        Some(fzf::directories(&config).await?)
     } else {
         session
     }
@@ -141,18 +116,16 @@ pub async fn new(session: Option<String>) -> Result<()> {
         bail!("the session does not exists as a directory in the fs");
     }
 
-    set(session).await?;
+    tmux::set(session).await?;
 
     config.sessions.retain(|s| s != session);
     config.sessions.push(String::from(session));
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn go(session: Option<String>) -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn go(mut config: Config, session: Option<String>) -> Result<()> {
     let session = if session.is_none() {
         if config.sessions.is_empty() {
             println!("No sessions in the history.");
@@ -177,18 +150,16 @@ pub async fn go(session: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    set(session).await?;
+    tmux::set(session).await?;
 
     config.sessions.retain(|s| s != session);
     config.sessions.push(String::from(session));
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn add(session: String, set: bool) -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn add(mut config: Config, session: String, set: bool) -> Result<()> {
     if config.sessions.contains(&session) {
         println!("Session already exists in the history.");
         return Ok(());
@@ -197,10 +168,10 @@ pub async fn add(session: String, set: bool) -> Result<()> {
     tmux::new_session(&session).await?;
     config.sessions.push(session.clone());
 
-    Config::save(&config)?;
+    config.save()?;
 
     if set {
-        crate::sessions::set(&session).await?;
+        tmux::set(&session).await?;
     }
 
     println!("Session {} added to the history.", &session);
@@ -208,9 +179,7 @@ pub async fn add(session: String, set: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn remove(session: String) -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn remove(mut config: Config, session: String) -> Result<()> {
     // If we are currently on the session to be removed then bail
     if tmux::current_session().await? == session {
         println!("Cannot remove the current session.");
@@ -220,20 +189,19 @@ pub async fn remove(session: String) -> Result<()> {
     // Remove the `session` from the `history`.
     config.sessions.retain(|s| s != &session);
 
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn sync(reverse: bool) -> Result<()> {
+pub async fn sync(config: Config, reverse: bool) -> Result<()> {
     match reverse {
-        true => sync_from_tmux().await,
-        false => sync_to_tmux().await,
+        true => sync_from_tmux(config).await,
+        false => sync_to_tmux(config).await,
     }
 }
 
-pub async fn sync_to_tmux() -> Result<()> {
-    let config = Config::load()?;
+pub async fn sync_to_tmux(config: Config) -> Result<()> {
     let sessions = tmux::ls().await?;
 
     for session in sessions {
@@ -253,88 +221,72 @@ pub async fn sync_to_tmux() -> Result<()> {
     Ok(())
 }
 
-pub async fn sync_from_tmux() -> Result<()> {
-    let mut config = Config::load()?;
-
+pub async fn sync_from_tmux(mut config: Config) -> Result<()> {
     let tmux_sessions = tmux::ls().await?;
-
-    println!("tmux sessions: {:?}", tmux_sessions);
 
     config.sessions = tmux_sessions;
 
     // Get a copy of the last element of the config.sessions array
     let last = config.sessions.last().cloned().wrap_err("fail to get the last session")?;
 
-    set(&last).await?;
+    tmux::set(&last).await?;
 
-    Config::save(&config)?;
+    config.save()?;
 
     Ok(())
 }
 
-pub async fn next(show: bool) -> Result<()> {
-    let mut config = Config::load()?;
-
-    // Check if the `history` has zero entries.
+pub async fn next(mut config: Config, show: bool) -> Result<()> {
     if config.sessions.is_empty() {
         println!("No more sessions in the history.");
         return Ok(());
     }
 
-    // Check if there's only one `session` in the `history`.
     if config.sessions.len() == 1 {
         println!("Only one session in the history.");
         return Ok(());
     }
 
-    // Pop the latest `session` of the history.
-    let session = config.sessions.pop();
-
-    // Move the popped `session` to the first element of the history.
-    if let Some(session) = session {
-        if show {
-            println!("Next session: {}", session);
-            return Ok(());
-        }
-        set(&session).await?;
-
-        config.sessions.insert(0, session);
-    } else {
-        println!("No more sessions in the history.");
-    }
-
-    Config::save(&config)?;
-
-    Ok(())
-}
-
-pub async fn previous(show: bool) -> Result<()> {
-    let mut config = Config::load()?;
-
-    // Check if the `history` has zero entries.
-    if config.sessions.is_empty() {
-        println!("No more sessions in the history.");
-        return Ok(());
-    }
-
-    // Check if there's only one `session` in the `history`.
-    if config.sessions.len() == 1 {
-        println!("Only one session in the history.");
-        return Ok(());
-    }
-
-    // Pop the first element from the `history`.
+    // Pop the first `session` inside `config.sessions`
     let session = config.sessions.remove(0);
 
-    // Append the `session` to the last of the `history` vector.
     if show {
-        println!("Previous session: {}", session);
+        println!("Next session: {}", session);
         return Ok(());
     }
 
-    set(&session).await?;
     config.sessions.push(session.clone());
-    Config::save(&config)?;
+    tmux::set(&session).await?;
+
+    config.save()?;
+
+    Ok(())
+}
+
+pub async fn previous(mut config: Config, show: bool) -> Result<()> {
+    if config.sessions.is_empty() {
+        println!("No more sessions in the history.");
+        return Ok(());
+    }
+
+    if config.sessions.len() == 1 {
+        println!("Only one session in the history.");
+        return Ok(());
+    }
+
+    let current = config.sessions.pop().wrap_err("fail to get the current session")?;
+    let prev = config.sessions.last().cloned().wrap_err("fail to get the previous session")?;
+
+    if show {
+        println!("Previous session: {}", prev);
+        return Ok(());
+    }
+
+    tmux::set(&prev).await?;
+    // Append the `current` session to the beginning of the `config.sessions` vector.
+    config.sessions.insert(0, current);
+
+    config.save()?;
 
     Ok(())
 }
