@@ -47,6 +47,9 @@ pub enum Commands {
     /// Reads a session or a session message
     #[clap(name = "edit")]
     Edit,
+    /// Prints the sessionizer configuration to stdout
+    #[clap(name = "print")]
+    Print,
 }
 
 #[derive(Debug, Parser)]
@@ -61,7 +64,14 @@ pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Init { force } => init(force).await,
         Commands::Edit => edit().await,
+        Commands::Print => print().await,
     }
+}
+
+pub async fn print() -> Result<()> {
+    println!("{:#?}", Config::load()?);
+
+    Ok(())
 }
 
 pub async fn init(force: bool) -> Result<()> {

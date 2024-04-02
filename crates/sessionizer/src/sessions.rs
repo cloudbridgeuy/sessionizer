@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::{eyre, ContextCompat, OptionExt, Result, WrapErr};
+use color_eyre::eyre::bail;
+use color_eyre::eyre::{ContextCompat, Result};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
 
 use crate::config::Config;
+use crate::fzf;
 use crate::tmux;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,6 +21,12 @@ pub enum Commands {
     /// Go to a session.
     #[clap(name = "go")]
     Go {
+        /// Tmux Session
+        session: Option<String>,
+    },
+    /// Create and go to a new session.
+    #[clap(name = "new")]
+    New {
         /// Tmux Session
         session: Option<String>,
     },
@@ -79,6 +86,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Next { show } => next(show).await,
         Commands::Previous { show } => previous(show).await,
         Commands::Sync { reverse } => sync(reverse).await,
+        Commands::New { session } => new(session).await,
     }
 }
 
@@ -92,16 +100,52 @@ pub async fn history() -> Result<()> {
 
 pub async fn set(session: &str) -> Result<()> {
     // Create the session if it doesn't exist.
+    log::debug!("Checking if tmux has session: {}", session);
     if !tmux::has_session(session).await? {
+        log::debug!("Creating session: {}", session);
         tmux::new_session(session).await?
     }
 
     // Attach to the existing session.
+    log::debug!("Checking if tmux is running");
     if tmux::is_active()? {
+        log::debug!("Changing client to point to session: {}", session);
         tmux::switch_client(session).await?;
     } else {
+        log::debug!("Attaching tmux to session: {}", session);
         tmux::attach(session).await?;
     }
+
+    Ok(())
+}
+
+pub async fn new(session: Option<String>) -> Result<()> {
+    let mut config = Config::load()?;
+
+    let session = if session.is_none() {
+        if config.sessions.is_empty() {
+            println!("No sessions in the history.");
+            return Ok(());
+        }
+
+        Some(fzf::directories().await?)
+    } else {
+        session
+    }
+    .unwrap();
+
+    let session = session.trim();
+
+    // Check that the `session` points to an existing directory.
+    if !std::path::Path::new(&session).exists() {
+        bail!("the session does not exists as a directory in the fs");
+    }
+
+    set(session).await?;
+
+    config.sessions.retain(|s| s != session);
+    config.sessions.push(String::from(session));
+    Config::save(&config)?;
 
     Ok(())
 }
@@ -115,13 +159,18 @@ pub async fn go(session: Option<String>) -> Result<()> {
             return Ok(());
         }
 
-        Some(fzf_sessions(config.sessions.clone()).await?)
+        Some(fzf::sessions(config.sessions.clone()).await?)
     } else {
         session
     }
     .unwrap();
 
     let session = session.trim();
+
+    // Check that the `session` points to an existing directory.
+    if !std::path::Path::new(&session).exists() {
+        bail!("the session does not exists as a directory in the fs");
+    }
 
     if !config.sessions.iter().any(|s| s == session) {
         println!("Session not found in the history.");
@@ -135,36 +184,6 @@ pub async fn go(session: Option<String>) -> Result<()> {
     Config::save(&config)?;
 
     Ok(())
-}
-
-pub async fn fzf_sessions(sessions: Vec<String>) -> Result<String> {
-    let mut fzf = tokio::process::Command::new("fzf")
-        .args([
-            "--header",
-            "Press CTRL-X to delete a session.",
-            "--bind",
-            "ctrl-x:execute-silent(sessionizer sessions remove {+})+reload(sessionizer sessions list)"
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .wrap_err("Failed to spawn fzf")?;
-
-    let mut stdin = fzf.stdin.take().ok_or_eyre("fail to take stdin")?;
-    tokio::spawn(async move {
-        stdin.write_all(sessions.join("\n").as_bytes()).await.expect("fail to write to stdin");
-        drop(stdin);
-    });
-
-    // wait for the process to complete
-    let fzf = fzf.wait_with_output().await?;
-
-    // Bail if the status of fzf was an error
-    if !fzf.status.success() {
-        Err(eyre!("fzf error"))
-    } else {
-        Ok(String::from_utf8(fzf.stdout)?)
-    }
 }
 
 pub async fn add(session: String, set: bool) -> Result<()> {

@@ -20,8 +20,10 @@ pub async fn kill_session(session: &str) -> Result<()> {
 }
 
 pub async fn switch_client(session: &str) -> Result<()> {
+    let session = session.replace('.', "·");
+
     match tokio::process::Command::new("tmux")
-        .args(["switch-client", "-t", session])
+        .args(["switch-client", "-t", &session])
         .spawn()
         .wrap_err("fail to spawn tmux")?
         .wait()
@@ -95,6 +97,8 @@ pub fn is_active() -> Result<bool> {
 }
 
 pub async fn attach(session: &str) -> Result<bool> {
+    let session = session.replace('.', "·");
+
     match tokio::process::Command::new("tmux")
         .args(["attach", "-t", format!("={}", session).as_str()])
         .spawn()
@@ -114,8 +118,10 @@ pub async fn attach(session: &str) -> Result<bool> {
 }
 
 pub async fn new_session(session: &str) -> Result<()> {
+    let name = session.replace('.', "·");
+
     match tokio::process::Command::new("tmux")
-        .args(["new-session", "-s", session, "-c", session, "-d"])
+        .args(["new-session", "-s", &name, "-c", session, "-d"])
         .spawn()
         .wrap_err("fail to spawn tmux")?
         .wait()
@@ -133,6 +139,8 @@ pub async fn new_session(session: &str) -> Result<()> {
 }
 
 pub async fn has_session(session: &str) -> Result<bool> {
+    let session = session.replace('.', "·");
+
     match tokio::process::Command::new("tmux")
         .args(["has-session", "-t", format!("={}", session).as_str()])
         .spawn()
@@ -142,7 +150,7 @@ pub async fn has_session(session: &str) -> Result<bool> {
     {
         Ok(status) => {
             if !status.success() {
-                Err(eyre!("tmux failed with status: {}", status))
+                Ok(false)
             } else {
                 Ok(true)
             }

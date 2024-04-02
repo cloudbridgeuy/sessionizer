@@ -3,6 +3,7 @@ use color_eyre::eyre::bail;
 
 mod config;
 mod directories;
+mod fzf;
 mod sessions;
 mod shutdown;
 mod tmux;
