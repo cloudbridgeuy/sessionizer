@@ -5,6 +5,7 @@ mod config;
 mod directories;
 mod sessions;
 mod shutdown;
+mod tmux;
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {

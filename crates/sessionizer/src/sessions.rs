@@ -1,6 +1,10 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, ContextCompat, OptionExt, Result, WrapErr};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
+
+use crate::config::Config;
+use crate::tmux;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Sessions {
@@ -17,13 +21,16 @@ pub enum Commands {
     #[clap(name = "go")]
     Go {
         /// Tmux Session
-        session: String,
+        session: Option<String>,
     },
     /// Add a new session.
     #[clap(name = "add")]
     Add {
         /// Tmux Session
         session: String,
+        /// Set the new session and transition to it.
+        #[clap(short, long)]
+        set: bool,
     },
     /// Remove a running session.
     #[clap(name = "remove", alias = "rm")]
@@ -45,6 +52,14 @@ pub enum Commands {
         #[clap(short, long)]
         show: bool,
     },
+    /// Sync the sessionizer sessions to and from `tmux`.
+    ///
+    /// NOTE: To TMUX by default.
+    Sync {
+        /// Reverse the action to synchronize the sessions from `tmux`
+        #[clap(short, long)]
+        reverse: bool,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -59,38 +74,115 @@ pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::History => history().await,
         Commands::Go { session } => go(session).await,
-        Commands::Add { session } => add(session).await,
+        Commands::Add { session, set } => add(session, set).await,
         Commands::Remove { session } => remove(session).await,
         Commands::Next { show } => next(show).await,
         Commands::Previous { show } => previous(show).await,
+        Commands::Sync { reverse } => sync(reverse).await,
     }
 }
 
 pub async fn history() -> Result<()> {
-    let config = crate::config::Config::load()?;
+    let config = Config::load()?;
 
-    for (index, session) in config.sessions.history.iter().enumerate() {
-        println!("{}: {}", index + 1, session);
+    println!("{}", config.sessions.join("\n"));
+
+    Ok(())
+}
+
+pub async fn set(session: &str) -> Result<()> {
+    // Create the session if it doesn't exist.
+    if !tmux::has_session(session).await? {
+        tmux::new_session(session).await?
+    }
+
+    // Attach to the existing session.
+    if tmux::is_active()? {
+        tmux::switch_client(session).await?;
+    } else {
+        tmux::attach(session).await?;
     }
 
     Ok(())
 }
 
-pub async fn go(session: String) -> Result<()> {
-    todo!()
+pub async fn go(session: Option<String>) -> Result<()> {
+    let mut config = Config::load()?;
+
+    let session = if session.is_none() {
+        if config.sessions.is_empty() {
+            println!("No sessions in the history.");
+            return Ok(());
+        }
+
+        Some(fzf_sessions(config.sessions.clone()).await?)
+    } else {
+        session
+    }
+    .unwrap();
+
+    let session = session.trim();
+
+    if !config.sessions.iter().any(|s| s == session) {
+        println!("Session not found in the history.");
+        return Ok(());
+    }
+
+    set(session).await?;
+
+    config.sessions.retain(|s| s != session);
+    config.sessions.push(String::from(session));
+    Config::save(&config)?;
+
+    Ok(())
 }
 
-pub async fn add(session: String) -> Result<()> {
-    let mut config = crate::config::Config::load()?;
+pub async fn fzf_sessions(sessions: Vec<String>) -> Result<String> {
+    let mut fzf = tokio::process::Command::new("fzf")
+        .args([
+            "--header",
+            "Press CTRL-X to delete a session.",
+            "--bind",
+            "ctrl-x:execute-silent(sessionizer sessions remove {+})+reload(sessionizer sessions list)"
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .wrap_err("Failed to spawn fzf")?;
 
-    if config.sessions.history.contains(&session) {
+    let mut stdin = fzf.stdin.take().ok_or_eyre("fail to take stdin")?;
+    tokio::spawn(async move {
+        stdin.write_all(sessions.join("\n").as_bytes()).await.expect("fail to write to stdin");
+        drop(stdin);
+    });
+
+    // wait for the process to complete
+    let fzf = fzf.wait_with_output().await?;
+
+    // Bail if the status of fzf was an error
+    if !fzf.status.success() {
+        Err(eyre!("fzf error"))
+    } else {
+        Ok(String::from_utf8(fzf.stdout)?)
+    }
+}
+
+pub async fn add(session: String, set: bool) -> Result<()> {
+    let mut config = Config::load()?;
+
+    if config.sessions.contains(&session) {
         println!("Session already exists in the history.");
         return Ok(());
     }
 
-    config.sessions.history.push(session.clone());
+    tmux::new_session(&session).await?;
+    config.sessions.push(session.clone());
 
-    crate::config::Config::save(&config)?;
+    Config::save(&config)?;
+
+    if set {
+        crate::sessions::set(&session).await?;
+    }
 
     println!("Session {} added to the history.", &session);
 
@@ -98,35 +190,86 @@ pub async fn add(session: String) -> Result<()> {
 }
 
 pub async fn remove(session: String) -> Result<()> {
-    let mut config = crate::config::Config::load()?;
+    let mut config = Config::load()?;
+
+    // If we are currently on the session to be removed then bail
+    if tmux::current_session().await? == session {
+        println!("Cannot remove the current session.");
+        return Ok(());
+    }
 
     // Remove the `session` from the `history`.
-    config.sessions.history.retain(|s| s != &session);
+    config.sessions.retain(|s| s != &session);
 
-    crate::config::Config::save(&config)?;
+    Config::save(&config)?;
 
-    println!("Session {} removed from the history.", &session);
+    Ok(())
+}
+
+pub async fn sync(reverse: bool) -> Result<()> {
+    match reverse {
+        true => sync_from_tmux().await,
+        false => sync_to_tmux().await,
+    }
+}
+
+pub async fn sync_to_tmux() -> Result<()> {
+    let config = Config::load()?;
+    let sessions = tmux::ls().await?;
+
+    for session in sessions {
+        if !config.sessions.contains(&session) {
+            tmux::kill_session(&session).await?;
+        }
+    }
+
+    for session in &config.sessions {
+        if tmux::has_session(session).await? {
+            continue;
+        }
+
+        tmux::new_session(session).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn sync_from_tmux() -> Result<()> {
+    let mut config = Config::load()?;
+
+    let tmux_sessions = tmux::ls().await?;
+
+    println!("tmux sessions: {:?}", tmux_sessions);
+
+    config.sessions = tmux_sessions;
+
+    // Get a copy of the last element of the config.sessions array
+    let last = config.sessions.last().cloned().wrap_err("fail to get the last session")?;
+
+    set(&last).await?;
+
+    Config::save(&config)?;
 
     Ok(())
 }
 
 pub async fn next(show: bool) -> Result<()> {
-    let mut config = crate::config::Config::load()?;
+    let mut config = Config::load()?;
 
     // Check if the `history` has zero entries.
-    if config.sessions.history.is_empty() {
+    if config.sessions.is_empty() {
         println!("No more sessions in the history.");
         return Ok(());
     }
 
     // Check if there's only one `session` in the `history`.
-    if config.sessions.history.len() == 1 {
+    if config.sessions.len() == 1 {
         println!("Only one session in the history.");
         return Ok(());
     }
 
     // Pop the latest `session` of the history.
-    let session = config.sessions.history.pop();
+    let session = config.sessions.pop();
 
     // Move the popped `session` to the first element of the history.
     if let Some(session) = session {
@@ -134,33 +277,35 @@ pub async fn next(show: bool) -> Result<()> {
             println!("Next session: {}", session);
             return Ok(());
         }
-        config.sessions.history.insert(0, session);
+        set(&session).await?;
+
+        config.sessions.insert(0, session);
     } else {
         println!("No more sessions in the history.");
     }
 
-    crate::config::Config::save(&config)?;
+    Config::save(&config)?;
 
     Ok(())
 }
 
 pub async fn previous(show: bool) -> Result<()> {
-    let mut config = crate::config::Config::load()?;
+    let mut config = Config::load()?;
 
     // Check if the `history` has zero entries.
-    if config.sessions.history.is_empty() {
+    if config.sessions.is_empty() {
         println!("No more sessions in the history.");
         return Ok(());
     }
 
     // Check if there's only one `session` in the `history`.
-    if config.sessions.history.len() == 1 {
+    if config.sessions.len() == 1 {
         println!("Only one session in the history.");
         return Ok(());
     }
 
     // Pop the first element from the `history`.
-    let session = config.sessions.history.remove(0);
+    let session = config.sessions.remove(0);
 
     // Append the `session` to the last of the `history` vector.
     if show {
@@ -168,8 +313,9 @@ pub async fn previous(show: bool) -> Result<()> {
         return Ok(());
     }
 
-    config.sessions.history.push(session.clone());
-    crate::config::Config::save(&config)?;
+    set(&session).await?;
+    config.sessions.push(session.clone());
+    Config::save(&config)?;
 
     Ok(())
 }

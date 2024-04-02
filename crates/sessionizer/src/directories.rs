@@ -1,5 +1,20 @@
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Directory {
+    pub path: String,
+    pub mindepth: usize,
+    pub maxdepth: usize,
+    pub grep: Option<String>,
+}
+
+impl Directory {
+    pub fn new(path: String) -> Self {
+        Self { path, mindepth: 1, maxdepth: 1, grep: None }
+    }
+}
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {

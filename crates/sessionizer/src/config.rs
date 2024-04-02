@@ -1,27 +1,25 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::{format_err, Result};
+use color_eyre::eyre::{eyre, Result, WrapErr};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub directories: Vec<String>,
-    pub sessions: crate::sessions::Sessions,
+    pub directories: Vec<crate::directories::Directory>,
+    pub sessions: Vec<String>,
     pub env: Vec<String>,
 }
 
 impl Config {
+    pub fn new() -> Self {
+        Self { directories: vec![], sessions: vec![], env: vec![] }
+    }
+
     pub fn save(config: &Config) -> Result<()> {
         let path = Self::home()?;
 
-        let text = match serde_yaml::to_string(&config) {
-            Ok(text) => Ok(text),
-            Err(err) => Err(format_err!(err)),
-        }?;
+        let text = serde_yaml::to_string(&config).wrap_err("fail to serialize config")?;
 
-        match std::fs::write(path, text) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(format_err!(err)),
-        }
+        std::fs::write(path, text).wrap_err("fail to save config")
     }
 
     pub fn load() -> Result<Config> {
@@ -29,10 +27,7 @@ impl Config {
 
         // Read path and store it on a variable called yaml
         let yaml = std::fs::read_to_string(path)?;
-        match serde_yaml::from_str(&yaml) {
-            Ok(config) => Ok(config),
-            Err(err) => Err(format_err!(err)),
-        }
+        serde_yaml::from_str(&yaml).wrap_err("fail to deserialize config")
     }
 
     pub fn home() -> Result<String> {
@@ -73,14 +68,10 @@ pub async fn init(force: bool) -> Result<()> {
     let path = Config::home()?;
 
     if std::path::Path::new(&path).exists() && !force {
-        return Err(format_err!("Configuration file already exists. Use --force to override."));
+        return Err(eyre!("Configuration file already exists. Use --force to override."));
     }
 
-    let config = Config {
-        directories: vec![],
-        sessions: crate::sessions::Sessions { current: String::new(), history: vec![] },
-        env: vec![],
-    };
+    let config = Config::new();
 
     Config::save(&config)?;
 
@@ -97,14 +88,18 @@ pub async fn edit() -> Result<()> {
     match tokio::process::Command::new(&editor)
         .arg(path)
         .spawn()
-        .expect(format!("Expect the {} to start", &editor).as_str())
+        .wrap_err("fail to open editor")?
         .wait()
         .await
     {
-        Ok(_) => {
-            println!("Configuration file edited.");
-            Ok(())
+        Ok(status) => {
+            if !status.success() {
+                Err(eyre!("Editor exited with status: {}", status))
+            } else {
+                println!("Configuration file edited.");
+                Ok(())
+            }
         }
-        Err(err) => Err(format_err!(err)),
+        Err(err) => Err(eyre!("fail to wait for editor: {}", err)),
     }
 }
