@@ -1,11 +1,9 @@
 use clap::{Parser, Subcommand};
-use color_eyre::eyre::bail;
 
 mod config;
 mod directories;
 mod fzf;
 mod sessions;
-mod shutdown;
 mod tmux;
 
 use crate::config::Config;
@@ -38,21 +36,32 @@ async fn main() -> color_eyre::eyre::Result<()> {
     color_eyre::install()?;
     env_logger::init();
 
-    // Create the shutdown handler
-    let shutdown = crate::shutdown::Shutdown::new()?;
+    ctrlc::set_handler(move || {
+        log::error!("Ctrl-C received, stopping the program");
+        std::process::exit(1);
+    })?;
 
-    // Run app in separate async task
-    tokio::spawn(async {
-        if let Err(e) = run().await {
-            bail!("Application error: {}", e)
+    run().await
+}
+
+#[derive(Copy, Clone)]
+pub enum ExitStatus {
+    /// Program finished successfully.
+    Success,
+    /// Program finished with an known error.
+    Failure,
+    /// Program finished with an unknown error.
+    Error,
+}
+
+impl From<ExitStatus> for i32 {
+    fn from(status: ExitStatus) -> i32 {
+        match status {
+            ExitStatus::Success => 0,
+            ExitStatus::Failure => 1,
+            ExitStatus::Error => 2,
         }
-
-        Ok(())
-    });
-
-    shutdown.handle().await;
-
-    Ok(())
+    }
 }
 
 async fn run() -> color_eyre::eyre::Result<()> {
@@ -60,12 +69,23 @@ async fn run() -> color_eyre::eyre::Result<()> {
     let cli = Cli::parse();
 
     log::debug!("Loading configuration path");
-    let config_path = match cli.config {
+
+    let (config, config_path) = get_config(&cli)?;
+
+    log::debug!("Running command");
+    match cli.command {
+        Commands::Config(cli) => crate::config::run(&config_path, cli).await,
+        Commands::Directories(cli) => crate::directories::run(config, cli).await,
+        Commands::Sessions(cli) => crate::sessions::run(config, cli).await,
+    }
+}
+
+fn get_config(cli: &Cli) -> color_eyre::eyre::Result<(Config, String)> {
+    let config_path = match cli.config.clone() {
         Some(path) => path,
         None => Config::home()?,
     };
-
-    let config: Config = if let Commands::Config(sub) = &cli.command {
+    let config = if let Commands::Config(sub) = &cli.command {
         if let crate::config::Commands::Init { force: _ } = sub.command {
             log::debug!("Avoid creating configuration file");
             Config::new(&config_path)
@@ -77,18 +97,5 @@ async fn run() -> color_eyre::eyre::Result<()> {
         Config::load(&config_path)?
     };
 
-    log::debug!("Running command");
-    let result = match cli.command {
-        Commands::Config(cli) => crate::config::run(&config_path, cli).await,
-        Commands::Directories(cli) => crate::directories::run(config, cli).await,
-        Commands::Sessions(cli) => crate::sessions::run(config, cli).await,
-    };
-
-    match result {
-        Ok(_) => std::process::exit(0),
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    }
+    Ok((config, config_path))
 }
